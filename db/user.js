@@ -87,7 +87,6 @@ class UserController extends Controller {
      */
     buildForUpload(record) {
         return {
-            id: record.id,
             name: record.name,
             encryptedPassword: record.password.encryptedString,
             salt: record.password.salt,

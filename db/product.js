@@ -6,55 +6,33 @@ const Result = require("../lib/result.js");
 
 /**
  * @typedef {string} Name
- * @typedef {string} Username
- * @typedef {string} Password
  * 
- * @typedef {{ name: Name, username: Username, password: Password }} ProductController_Input
- * @typedef {{ name: Name, username: Username, password: EncryptedString, id: string? }} ProductController_Internal
- * @typedef {{ name: Name, username: Username, salt: string, encryptedPassword: string }} ProductController_Upload
+ * @typedef {{ name: Name, price: number, stock: number }} ProductController_Input
+ * @typedef {{ name: Name, price: number, stock: number, id: string? }} ProductController_Internal
+ * @typedef {{ name: Name, price: number, stock: number }} ProductController_Upload
  */
 
 /**
  * @extends {Controller<ProductController_Input, ProductController_Internal, ProductController_Upload>}
  */
-class UserController extends Controller {
-    static INSTANCE = new UserController();
+class ProductController extends Controller {
+    static INSTANCE = new ProductController();
 
-    static USER_SCHEMA__PARTIAL = {
+    static PRODUCT_SCHEMA = {
         name: new Validator()
             .required("El nombre debe estar presente")
             .maxLength(32, "El nombre debe tener una longitud de máximo 32 caracteres")
             .minLength(8, "El nombre debe tener mínimo 8 caracteres de longitud")
             .titleCase("El nombre debe estar capitalizado como título"),
-        username: new Validator()
-            .required("El nombre de usuario debe estar presente")
-            .maxLength(32, "El nombre de usuario debe tener una longitud de máximo 32 caracteres")
-            .minLength(8, "El nombre de usuario debe tener mínimo 8 caracteres de longitud")
-            .onlyAlphabetics("El nombre de usuario solo puede tener caracteres del alfabeto inglés y guiones bajos")
+        price: new Validator()
+            .required("El precio debe estar presente")
+            .isNumber("El precio debe ser un número")
+            .isGreaterThanZero("El precio debe ser mayor a cero"),
+        stock: new Validator()
+            .required("El precio debe estar presente")
+            .isNumber("El precio debe ser un número")
+            .isGreaterThanZero("El precio debe ser mayor a cero")
     };
-
-    static USER_SCHEMA__INPUT = (() => {
-        return { 
-            ...UserController.USER_SCHEMA__PARTIAL,
-            password: new Validator()
-                .required("La contraseña debe estar presente")
-                .maxLength(16, "La contraseña debe tener una longitud de máximo 16 caracteres")
-                .minLength(8, "La contraseña debe tener mínimo 8 caracteres de longitud")
-                .hasDigits("La contraseña debe tener dígitos")
-                .hasLowercase("La contraseña debe tener letras en minúscula")
-                .hasUppercase("La contraseña debe tener letras en mayúscula")
-        };
-    })();
-
-    static USER_SCHEMA__UPLOAD = (() => {
-        return { 
-            ...UserController.USER_SCHEMA__PARTIAL,
-            encryptedPassword: new Validator()
-                .required("La contraseña en su forma encriptada debe estar presente"),
-            salt: new Validator()
-                .required("El parámetro salt de la contraseña encriptada debe estar presente")
-        };
-    })();
 
     get connection() {
         return ProductConnection;
@@ -66,17 +44,16 @@ class UserController extends Controller {
      * @returns {Result<string, ProductController_Internal>}
      */
     build(record) {
-        const validation = Validator.validateObject(record, UserController.USER_SCHEMA__INPUT);
+        const validation = Validator.validateObject(record, ProductController.PRODUCT_SCHEMA);
         if (validation.isError()) return validation;
 
-        const password = EncryptedString.buildFromSource(record.password);
         const id = record.id;
-
+        
         return Result.ok({
+            id,
             name: record.name,
-            username: record.username,
-            password,
-            id
+            price: record.price,
+            stock: record.stock,
         });
     }
 
@@ -87,11 +64,9 @@ class UserController extends Controller {
      */
     buildForUpload(record) {
         return {
-            id: record.id,
             name: record.name,
-            encryptedPassword: record.password.encryptedString,
-            salt: record.password.salt,
-            username: record.username
+            price: record.price,
+            stock: record.stock,
         };
     }
 
@@ -102,17 +77,17 @@ class UserController extends Controller {
      * @returns {Result<string, ProductController_Internal>}
      */
     buildFromUpload(record, id) {
-        const validation = Validator.validateObject(record, UserController.USER_SCHEMA__UPLOAD);
+        const validation = Validator.validateObject(record, ProductController.PRODUCT_SCHEMA);
         if (validation.isError()) return validation;
 
         return Result.ok({
             name: record.name,
+            price: record.price,
+            stock: record.stock,
             id,
-            username: record.username,
-            password: EncryptedString.buildFromEncryption(record.salt, record.encryptedPassword)
         });
     }
 }
 
-module.exports = UserController.INSTANCE;
+module.exports = ProductController.INSTANCE;
 
