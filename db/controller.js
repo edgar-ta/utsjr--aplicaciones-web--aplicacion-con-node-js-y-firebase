@@ -31,6 +31,14 @@ class Controller {
      */
     buildForUpload(record) {};
 
+    /**
+     * 
+     * @param {UploadType} record 
+     * @param {string?} id 
+     * @returns {Result<string, InternalType>}
+     */
+    buildFromUpload(record, id) {};
+
 
     /**
      * @returns {Promise<InternalType[]>}
@@ -40,13 +48,14 @@ class Controller {
         const results = [];
         const records = await this.connection.get();
         records.forEach(record => {
-            const buildResult = this.build(record);
+            const data = record.data();
+            const buildResult = this.buildFromUpload(data, record.id);
             if (buildResult.isOk()) {
                 results.push(buildResult.getRight());
             } else {
                 console.debug("One of the records is invalid");
                 console.debug("Record: ");
-                console.debug(record);
+                console.debug(data);
                 console.debug("Message: ");
                 console.debug(buildResult.getLeft());
             }
@@ -60,14 +69,10 @@ class Controller {
      * @returns {Promise<boolean>}
      */
     async insert(record) {
-        const result = this.build(record);
-        if (result.isError()) return Promise.resolve(false);
+        const uploadRecord = this.buildForUpload(record);
 
-        const builtRecord = result.getRight();
-        const uploadRecord = this.buildForUpload(builtRecord);
-
-        return this.connection.doc()
-            .set(uploadRecord)
+        return this.connection
+            .add(uploadRecord)
             .then(() => true)
             .catch(() => false);
     };
@@ -79,12 +84,15 @@ class Controller {
      * @returns {Promise<Optional<DownloadType>>}
      */
     async find(id) {
-        this.connection
+        return this.connection
             .doc(id)
             .get()
-            .then((data) => {
-                const result = this.build(data);
-                if (result.isOk()) return Optional.some(result.getRight());
+            .then((record) => {
+                const result = this.buildFromUpload(record.data(), record.id);
+                
+                if (result.isOk()) {
+                    return Optional.some(result.getRight());
+                }
                 return Optional.empty();
             })
             .catch(() => Optional.empty())
@@ -94,14 +102,14 @@ class Controller {
     /**
      * 
      * @param {string} id 
-     * @returns {Promise<boolean>}
+     * @returns {Promise<string>}
      */
     async delete(id) {
         return this.connection
             .doc(id)
             .delete({ exists: true })
-            .then(() => true)
-            .catch(() => false)
+            .then(() => "")
+            .catch((reason) => reason)
             ;
     };
 }
