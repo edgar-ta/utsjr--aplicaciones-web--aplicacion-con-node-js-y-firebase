@@ -8,12 +8,17 @@ const Result = require("../lib/result.js");
  * @typedef {string} Name
  * 
  * @typedef {{ name: Name, price: number, stock: number }} ProductController_Input
- * @typedef {{ name: Name, price: number, stock: number, id: string? }} ProductController_Internal
- * @typedef {{ name: Name, price: number, stock: number }} ProductController_Upload
+ * @typedef {{ name: Name, price: number, stock: number }} ProductController_Internal_Incomplete
+ * @typedef {{ name: Name, price: number, stock: number }} ProductController_Payload
+ * @typedef {{ name: Name, price: number, stock: number, id: string, totalValue: number }} ProductController_Data
  */
 
 /**
- * @extends {Controller<ProductController_Input, ProductController_Internal, ProductController_Upload>}
+ * @typedef {ProductController_Internal_Incomplete & { id: string }} ProductController_Internal_Complete
+ */
+
+/**
+ * @extends {Controller<ProductController_Input, ProductController_Internal_Incomplete, ProductController_Payload, ProductController_Data>}
  */
 class ProductController extends Controller {
     static INSTANCE = new ProductController();
@@ -34,6 +39,10 @@ class ProductController extends Controller {
             .isGreaterThanZero("El precio debe ser mayor a cero")
     };
 
+    get instance() {
+        return ProductController.INSTANCE;
+    }
+
     get connection() {
         return ProductConnection;
     }
@@ -41,28 +50,44 @@ class ProductController extends Controller {
     /**
      * 
      * @param {ProductController_Input} record 
-     * @returns {Result<string, ProductController_Internal>}
+     * @returns {Promise<Result<string, ProductController_Internal_Incomplete>>}
      */
-    build(record) {
-        const validation = Validator.validateObject(record, ProductController.PRODUCT_SCHEMA);
-        if (validation.isError()) return validation;
+    async buildFromInput(record) {
+        return Validator
+            .validateObject(record, ProductController.PRODUCT_SCHEMA)
+            .then((value) => ({
+                name: record.name,
+                price: record.price,
+                stock: record.stock,
+            }))
+            ;
+    }
 
-        const id = record.id;
-        
-        return Result.ok({
-            id,
-            name: record.name,
-            price: record.price,
-            stock: record.stock,
-        });
+
+    /**
+     * 
+     * @param {ProductController_Payload} record 
+     * @param {string} id 
+     * @returns {Promise<Result<string, ProductController_Internal_Complete>>}
+     */
+    async buildFromPayload(record, id) {
+        return Validator
+            .validateObject(record, ProductController.PRODUCT_SCHEMA)
+            .then(value => ({
+                id,
+                name: record.name,
+                price: record.price,
+                stock: record.stock,
+            }))
+            ;
     }
 
     /**
      * 
-     * @param {ProductController_Internal} record 
-     * @returns {ProductController_Upload}
+     * @param {ProductController_Internal_Incomplete | ProductController_Internal_Complete} record 
+     * @returns {ProductController_Payload}
      */
-    buildForUpload(record) {
+    convertToPayload(record) {
         return {
             name: record.name,
             price: record.price,
@@ -72,22 +97,18 @@ class ProductController extends Controller {
 
     /**
      * 
-     * @param {ProductController_Upload} record 
-     * @param {string?} id 
-     * @returns {Result<string, ProductController_Internal>}
+     * @param {ProductController_Internal_Complete} record 
+     * @returns {Promise<ProductController_Data>}
      */
-    buildFromUpload(record, id) {
-        const validation = Validator.validateObject(record, ProductController.PRODUCT_SCHEMA);
-        if (validation.isError()) return validation;
-
-        return Result.ok({
+    async convertToData(record) {
+        return {
+            id: record.id,
             name: record.name,
             price: record.price,
             stock: record.stock,
-            id,
-        });
+            totalValue: record.stock * record.price
+        };
     }
 }
 
 module.exports = ProductController.INSTANCE;
-

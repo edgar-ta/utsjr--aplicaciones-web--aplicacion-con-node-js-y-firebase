@@ -10,12 +10,17 @@ const Result = require("../lib/result.js");
  * @typedef {string} Password
  * 
  * @typedef {{ name: Name, username: Username, password: Password }} UserController_Input
- * @typedef {{ name: Name, username: Username, password: EncryptedString, id: string? }} UserController_Internal
- * @typedef {{ name: Name, username: Username, salt: string, encryptedPassword: string }} UserController_Upload
+ * @typedef {{ name: Name, username: Username, password: EncryptedString }} UserController_Internal_Incomplete
+ * @typedef {{ name: Name, username: Username, salt: string, encryptedPassword: string }} UserController_Payload
+ * @typedef {{ name: Name, username: Username, salt: string, encryptedPassword: string, id: string, systemId: string }} UserController_Data
  */
 
 /**
- * @extends {Controller<UserController_Input, UserController_Internal, UserController_Upload>}
+ * @typedef {UserController_Internal_Incomplete & { id: string }} UserController_Internal_Complete
+ */
+
+/**
+ * @extends {Controller<UserController_Input, UserController_Internal_Incomplete, UserController_Payload>}
  */
 class UserController extends Controller {
     static INSTANCE = new UserController();
@@ -56,6 +61,10 @@ class UserController extends Controller {
         };
     })();
 
+    get instance() {
+        return UserController.INSTANCE;
+    }
+
     get connection() {
         return UserConnection;
     }
@@ -63,29 +72,47 @@ class UserController extends Controller {
     /**
      * 
      * @param {UserController_Input} record 
-     * @returns {Result<string, UserController_Internal>}
+     * @returns {Result<string, UserController_Internal_Incomplete>}
      */
-    build(record) {
-        const validation = Validator.validateObject(record, UserController.USER_SCHEMA__INPUT);
-        if (validation.isError()) return validation;
+    async buildFromInput(record) {
+        return Validator
+            .validateObject(record, UserController.USER_SCHEMA__INPUT)
+            .then((value) => {
+                const password = EncryptedString.buildFromSource(record.password);
+                return {
+                    name: record.name,
+                    username: record.username,
+                    password
+                }
+            })
+            ;
+    }
 
-        const password = EncryptedString.buildFromSource(record.password);
-        const id = record.id;
 
-        return Result.ok({
-            name: record.name,
-            username: record.username,
-            password,
-            id
-        });
+    /**
+     * 
+     * @param {UserController_Payload} record 
+     * @param {string} id 
+     * @returns {Promise<Result<string, UserController_Internal_Complete>>}
+     */
+    async buildFromPayload(record, id) {
+        return Validator
+            .validateObject(record, UserController.USER_SCHEMA__UPLOAD)
+            .then((value) => ({
+                name: record.name,
+                id,
+                username: record.username,
+                password: EncryptedString.buildFromEncryption(record.salt, record.encryptedPassword)
+            }))
+            ;
     }
 
     /**
      * 
-     * @param {UserController_Internal} record 
-     * @returns {UserController_Upload}
+     * @param {UserController_Internal_Incomplete | UserController_Internal_Complete} record 
+     * @returns {UserController_Payload}
      */
-    buildForUpload(record) {
+    convertToPayload(record) {
         return {
             name: record.name,
             encryptedPassword: record.password.encryptedString,
@@ -96,22 +123,19 @@ class UserController extends Controller {
 
     /**
      * 
-     * @param {UserController_Upload} record 
-     * @param {string?} id 
-     * @returns {Result<string, UserController_Internal>}
+     * @param {UserController_Internal_Complete} record 
+     * @returns {Promise<UserController_Data>}
      */
-    buildFromUpload(record, id) {
-        const validation = Validator.validateObject(record, UserController.USER_SCHEMA__UPLOAD);
-        if (validation.isError()) return validation;
-
-        return Result.ok({
+    async convertToData(record) {
+        return {
+            id: record.id,
             name: record.name,
-            id,
+            encryptedPassword: record.password.encryptedString,
+            salt: record.password.salt,
             username: record.username,
-            password: EncryptedString.buildFromEncryption(record.salt, record.encryptedPassword)
-        });
+            systemId: `${username}@${id}`
+        };
     }
 }
 
 module.exports = UserController.INSTANCE;
-

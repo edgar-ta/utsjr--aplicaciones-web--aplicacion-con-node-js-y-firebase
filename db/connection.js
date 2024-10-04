@@ -1,3 +1,7 @@
+/**
+ * @typedef {admin.firestore.CollectionReference<admin.firestore.DocumentData, admin.firestore.DocumentData>} CollectionType
+ */
+
 const admin = require("firebase-admin");
 const keys = require("../keys.json");
 
@@ -7,7 +11,16 @@ admin.initializeApp({
 
 const project = admin.firestore();
 
-const users     = project.collection("users");
-const products  = project.collection("products");
+/** @type {CollectionKind[]} */
+const collectionNames = [ "users", "products", "sales" ];
 
-module.exports = { users, products };
+/**
+ * @typedef {"users" | "products" | "sales"} CollectionKind
+ */
+
+/**
+ * @type { { [key in CollectionKind]: CollectionType } }
+ */
+const collections = Object.fromEntries(collectionNames.map(collectionName => [ collectionName, project.collection(collectionName) ]));
+
+module.exports = collections;
