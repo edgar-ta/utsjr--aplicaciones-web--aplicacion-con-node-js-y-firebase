@@ -72,13 +72,14 @@ class UserController extends Controller {
     /**
      * 
      * @param {UserController_Input} record 
-     * @returns {Result<string, UserController_Internal_Incomplete>}
+     * @returns {Promise<Result<string, UserController_Internal_Incomplete>>}
      */
     async buildFromInput(record) {
         return Validator
             .validateObject(record, UserController.USER_SCHEMA__INPUT)
-            .then((value) => {
+            .map((value) => {
                 const password = EncryptedString.buildFromSource(record.password);
+                
                 return {
                     name: record.name,
                     username: record.username,
@@ -98,7 +99,7 @@ class UserController extends Controller {
     async buildFromPayload(record, id) {
         return Validator
             .validateObject(record, UserController.USER_SCHEMA__UPLOAD)
-            .then((value) => ({
+            .map((value) => ({
                 name: record.name,
                 id,
                 username: record.username,
@@ -133,7 +134,7 @@ class UserController extends Controller {
             encryptedPassword: record.password.encryptedString,
             salt: record.password.salt,
             username: record.username,
-            systemId: `${username}@${id}`
+            systemId: `${record.username}@${record.id}`
         };
     }
 }

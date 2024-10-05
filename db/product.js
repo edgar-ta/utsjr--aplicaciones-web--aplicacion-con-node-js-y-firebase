@@ -55,12 +55,12 @@ class ProductController extends Controller {
     async buildFromInput(record) {
         return Validator
             .validateObject(record, ProductController.PRODUCT_SCHEMA)
-            .then((value) => ({
+            .map((value) => ({
                 name: record.name,
                 price: record.price,
                 stock: record.stock,
             }))
-            ;
+        ;
     }
 
 
@@ -73,13 +73,13 @@ class ProductController extends Controller {
     async buildFromPayload(record, id) {
         return Validator
             .validateObject(record, ProductController.PRODUCT_SCHEMA)
-            .then(value => ({
+            .map(value => ({
                 id,
                 name: record.name,
-                price: record.price,
-                stock: record.stock,
+                price: Number.parseFloat(record.price),
+                stock: Number.parseFloat(record.stock),
             }))
-            ;
+        ;
     }
 
     /**

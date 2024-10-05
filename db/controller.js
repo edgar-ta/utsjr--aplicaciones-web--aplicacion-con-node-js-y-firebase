@@ -3,6 +3,9 @@ const admin = require("firebase-admin");
 const Optional = require("../lib/optional.js");
 const Result = require("../lib/result.js");
 
+const PrettyId = require("../lib/pretty-id.js");
+const DateControlObject = require("../lib/date-control-object.js");
+
 
 /**
  * 
@@ -19,13 +22,23 @@ class Controller {
      * @typedef {InternalType_Incomplete & { id: string }} InternalType_Complete
      */
 
-    static RESPONSE = {
-        BAD_RESPONSE(response) { 
-            return (reason) => response.json({ type: "Bad response", details: reason }) 
-        },
-        WRONG_INPUT(response) {
-            return (message) => response.json({ type: "Wrong Input", details: message });
+    /**
+     * 
+     * @param {string} type 
+     * @returns {(response: Response<any, Record<string, any>, number>) => any => void}
+     */
+    static buildResponseCallback(type) {
+        return function(response) {
+            return (details) => response.json({ type, details });
         }
+    }
+
+    static RESPONSE_TYPE = {
+        SUCCESS: Controller.buildResponseCallback("Success"),
+        BAD_RESPONSE: Controller.buildResponseCallback("Bad response"),
+        BAD_URL: Controller.buildResponseCallback("Bad url"),
+        NOT_FOUND: Controller.buildResponseCallback("Not found"),
+        WRONG_INPUT: Controller.buildResponseCallback("Wrong input"),
     };
 
     /**
@@ -78,9 +91,15 @@ class Controller {
      */
     async getAll() {
         return this.connection.get()
+            .then(records => {
+                const array = [];
+                records.forEach(record => array.push(record))
+                return array;
+            })
             .then(records => Promise.all(records.map(async (record) => {
                 const data = record.data();
                 const buildResult = await this.buildFromPayload(data, record.id);
+
                 return buildResult;
             })))
             .then(results => {
@@ -89,9 +108,6 @@ class Controller {
                         const error = result.getLeft();
 
                         console.debug("One of the records is invalid");
-                        console.debug("Record: ");
-                        console.debug(data);
-                        console.debug("Message: ");
                         console.debug(error);
                     }
                 })
@@ -100,26 +116,6 @@ class Controller {
                     .map(result => result.getRight());
             })
         ;
-        
-        // const records = await this.connection.get();
-        // records.forEach(record => {
-        //     const data = record.data();
-        //     const buildResult = this.buildFromPayload(data, record.id);
-        //     if (buildResult.isOk()) {
-        //         const internalObject = buildResult.getRight();
-
-        //         results.push(internalObject);
-        //     } else {
-        //         const error = buildResult.getLeft();
-
-        //         console.debug("One of the records is invalid");
-        //         console.debug("Record: ");
-        //         console.debug(data);
-        //         console.debug("Message: ");
-        //         console.debug(error);
-        //     }
-        // });
-        // return results;
     };
 
     /**
@@ -145,94 +141,106 @@ class Controller {
      * @returns {Promise<Optional<InternalType_Complete>>}
      */
     async find(id) {
-        return this.connection
-            .doc(id)
-            .get()
-            .then((record) => {
-                const result = this.buildFromPayload(record.data(), record.id);
-                
-                if (result.isOk()) {
-                    return Optional.some(result.getRight());
-                }
-                return Optional.empty();
-            })
+        return this.connection.doc(id).get()
+            .then((record) => this.buildFromPayload(record.data() || {}, record.id))
+            .then(result => result.isError()? Optional.empty(): Optional.some(result.getRight()))
     }
 
 
     /**
      * 
      * @param {string} id 
-     * @returns {Promise<string>}
+     * @returns {Promise<Optional<string>>}
      */
     async delete(id) {
-        return this.connection
-            .doc(id)
-            .delete({ exists: true })
-            .then(() => "El registro se eliminó de manera exitosa")
-            ;
+        return this
+            .find(id)
+            .then((optionalRecord) => {
+                return optionalRecord.asyncMap(async (record) => {
+                    return this.connection.doc(record.id).delete({ exists: true })
+                        .then(() => "El registro se eliminó de manera exitosa")
+                    ;
+                });
+            })
+        ;
     };
 
     get routes() {
         const router = require("express").Router();
-        const ControllerClass = this.instance;
         
         router.get("/all", async (request, response) => {
-            ControllerClass
+            await this
                 .getAll()
-                .then(rawRecords => Promise.all(rawRecords.map(ControllerClass.convertToData)))
-                .then(records => response.json(records))
-                .catch((reason) => response.json({ type: "Bad response", details: reason }))
-                ;
+                .then(rawRecords => Promise.all(rawRecords.map((value) => this.convertToData(value))))
+                .then(Controller.RESPONSE_TYPE.SUCCESS(response))
+                .catch(Controller.RESPONSE_TYPE.BAD_RESPONSE(response))
+            ;
         });
 
         
         router.post("/new", async (request, response) => {
             const body = request.body;
-            const result = ControllerClass.buildFromInput(body);
-            if (result.isError()) {
-                const message = result.getLeft();
-                response.json({ type: "Wrong Input", details: message });
-                return;
-            }
-        
-            const data = result.getRight();
-            ControllerClass
-                .insert(data)
-                .then(() => response.json({ type: "Success", details: "La información del registro se ingresó correctamente" }))
-                .catch((reason) => response.json({ type: "Bad response", details: reason }))
-                ;
-        })
+
+            await this
+                .buildFromInput(body)
+                .then(result => {
+                    if (result.isError()) {
+                        const message = result.getLeft();
+                        return Controller.RESPONSE_TYPE.WRONG_INPUT(response)(message);
+                    }
+
+                    const data = result.getRight();
+                    return this
+                        .insert(data)
+                        .then(Controller.RESPONSE_TYPE.SUCCESS(response))
+                    ;
+                })
+                .catch(Controller.RESPONSE_TYPE.BAD_RESPONSE(response))
+            ;
+        });
         
         router.get("/find/:id", async (request, response) => {
             const id = request.params.id;
             if (id === undefined || id === null || id === "") {
-                response.json({ type: "Bad URL", details: "La URL debería incluir el parámetro 'id'" });
+                Controller.RESPONSE_TYPE.BAD_URL(response)("La URL debería incluir el parámetro 'id'");
                 return;
             }
         
-            const user = await ControllerClass.find(id);
-            if (user.isEmpty()) {
-                response.json({ type: "Not found", details: "El registro con la id especificada no existe" })
-            } else {
-                const data = user.unwrap();
-                const payload = await ControllerClass.convertToData(data);
-        
-                response.json(payload);
-            }
+            await this
+                .find(id)
+                .then((optionalUser) => {
+                    if (optionalUser.isEmpty()) {
+                        return Controller.RESPONSE_TYPE.NOT_FOUND(response)("El registro con la id especificada no existe");
+                    } else {
+                        const user = optionalUser.unwrap();
+                        return this
+                            .convertToData(user)
+                            .then(payload => Controller.RESPONSE_TYPE.SUCCESS(response)(payload))
+                        ;
+                    }
+                })
+                .catch(Controller.RESPONSE_TYPE.BAD_RESPONSE(response))
+            ;
         })
         
         router.delete("/delete/:id", async (request, response) => {
             const id = request.params.id;
             if (id === undefined || id === null || id === "") {
-                response.json({ type: "Bad URL", details: "La URL debería incluir el parámetro 'id'" });
+                Controller.RESPONSE_TYPE.BAD_URL(response)("La URL debería incluir el parámetro 'id'");
                 return;
             }
             
-            await ControllerClass
+            await this
                 .delete(id)
-                .then(() => response.json({ type: "Success", details: "El registro especificado se eliminó correctamente" }))
-                .catch((reason) => response.json({ type: "Bad response", details: reason }))
-                ;
+                .then((optionalString) => {
+                    if (optionalString.isEmpty()) {
+                        return Controller.RESPONSE_TYPE.NOT_FOUND(response)("El registro con la id especificada no existe");
+                    } else {
+                        return Controller.RESPONSE_TYPE.SUCCESS(response)(optionalString.unwrap());
+                    }
+                })
+                .catch(Controller.RESPONSE_TYPE.BAD_RESPONSE(response))
+            ;
         });
 
         return router;

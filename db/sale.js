@@ -6,17 +6,21 @@ const PrettyId = require("../lib/pretty-id.js");
 
 const Controller = require("./controller.js");
 const Validator = require("../lib/validator");
+const Optional = require("../lib/optional.js");
 const SalesConnection = require("./connection.js").sales;
 
 /**
  * @typedef {"canceled" | "active" | "pending"} SaleState
  */
 
+/**
+ * @typedef {import("firebase-admin").firestore.Timestamp} FirestoreTimestamp
+ */
 
 /**
  * @typedef {{ user: string, product: string, amountOfProduct: number }} SaleController_Input
  * @typedef {{ user: string, product: string, amountOfProduct: number, date: Date, state: SaleState }} SaleController_Internal_Incomplete
- * @typedef {{ user: string, product: string, amountOfProduct: number, date: Date, state: SaleState }} SaleController_Payload
+ * @typedef {{ user: string, product: string, amountOfProduct: number, date: Date | FirestoreTimestamp, state: SaleState }} SaleController_Payload
  * @typedef {{ user: PrettyId.PrettyId, product: PrettyId.PrettyId, amountOfProduct: number, purchaseTime: DateControlObject.DateControlObject, state: SaleState, amountOfSale: number }} SaleController_Data
  */
 
@@ -53,17 +57,19 @@ class SaleController extends Controller {
      * 
      * @param {string} user 
      * @param {string} product 
-     * @returns {Promise<boolean>}
+     * @returns {Promise<[ import("./user.js").UserController_Internal_Complete, import("./product.js").ProductController_Internal_Complete ]>}
      */
-    async validateUserAndProduct(user, product) {
+    async validateUserAndProductExist(user, product) {
         return Promise.all([
             UserController
                 .find(user)
-                .then(optional => optional.isSome()? Promise.resolve(true): Promise.reject("El usuario especificado no existe")),
+                .then(optional => optional.isSome()? Promise.resolve(optional.unwrap()): Promise.reject("El usuario especificado no existe"))
+                ,
             ProductController
                 .find(product)
-                .then(optional => optional.isSome()? Promise.resolve(true): Promise.reject("El producto especificado no existe")),
-        ]);
+                .then(optional => optional.isSome()? Promise.resolve(optional.unwrap()): Promise.reject("El producto especificado no existe")),
+        ])
+        ;
     }
 
     /**
@@ -74,11 +80,15 @@ class SaleController extends Controller {
     async buildFromInput(record) {
         return Validator
             .validateObject(record, SaleController.SALE_SCHEMA)
-            .asyncThen(async (value) => this.validateUserAndProduct(record.user, record.product).then(() => {
+            .asyncMap(async (value) => this.validateUserAndProductExist(record.user, record.product).then(([ _, product ]) => {
                 const saleDate = new Date();
         
                 /** @type {SaleState} */
                 const saleState = "active";
+
+                if (record.amountOfProduct > product.stock) {
+                    return Promise.reject("La cantidad de producto de la venta es mayor a la cantidad de producto en existencia");
+                }
 
                 return {
                     user: record.user,
@@ -100,14 +110,24 @@ class SaleController extends Controller {
     async buildFromPayload(record, id) {
         return Validator
             .validateObject(record, SaleController.SALE_SCHEMA)
-            .asyncThen(async (value) => this.validateUserAndProduct(record.user, record.product).then(() => ({
-                id,
-                amountOfProduct: record.amountOfProduct,
-                date: record.date,
-                product: record.product,
-                state: record.state,
-                user: record.user
-            })))
+            .asyncMap(async (value) => this.validateUserAndProductExist(record.user, record.product).then(() => {
+                /** @type {Date} */
+                let date;
+                if (!(record.date instanceof Date)) {
+                    date = record.date.toDate();
+                } else {
+                    date = record.date;
+                }
+
+                return {
+                    id,
+                    amountOfProduct: Number.parseInt(record.amountOfProduct),
+                    date,
+                    product: record.product,
+                    state: record.state,
+                    user: record.user
+                }
+            }))
         ;
     }
 
@@ -132,16 +152,10 @@ class SaleController extends Controller {
      * @returns {Promise<SaleController_Data>}
      */
     async convertToData(record) {
-        return Promise
-            .all([ UserController.find(record.user), ProductController.find(record.product) ])
-            .then(([ optionalUser, optionalProduct ]) => {
-                /** @type {import("./user.js").UserController_Internal_Complete} */
-                const user = optionalUser.unwrap();
-
-                /** @type {import("./product.js").ProductController_Internal_Complete} */
-                const product = optionalProduct.unwrap();
-
+        return this.validateUserAndProductExist(record.user, record.product)
+            .then(([ user, product ]) => {
                 return {
+                    id: record.id,
                     amountOfProduct: record.amountOfProduct,
                     amountOfSale: record.amountOfProduct * product.price,
                     purchaseTime: DateControlObject.buildDateControlObject(record.date),
@@ -152,15 +166,66 @@ class SaleController extends Controller {
             });
     };
 
-    async delete() {
+    /**
+     * 
+     * @param {SaleController_Internal_Incomplete} record 
+     * @returns {Promise<string>}
+     */
+    async insert(record) {
+        return ProductController
+            .find(record.product)
+            .then((optionalProduct) => {
+                if (optionalProduct.isEmpty()) {
+                    return Promise.reject("El producto especificado ya no existe");
+                }
+                const product = optionalProduct.unwrap();
+                const newStock = product.stock - record.amountOfProduct;
+                if (newStock < 0) {
+                    return Promise.reject("Ya no hay cantidad suficiente del producto especificado");
+                }
+
+                return ProductController.connection.doc(record.product)
+                    .update({ stock: newStock });
+            })
+            .then(() => super.insert(record))
+        ;
+    }
+
+    /**
+     * @param {string} id 
+     * @returns {Promise<Optional<string>>}
+     */
+    async delete(id) {
         /** @type {SaleState} */
         const state = "canceled";
 
-        return this.connection
-            .doc(id)
-            .update({
-                state
-            });
+        return this
+            .find(id)
+            .then(optionalSale => {
+                if (optionalSale.isEmpty()) {
+                    return Promise.reject("La venta especificada ya no existe");
+                }
+                /** @type {SaleController_Internal_Complete} */
+                const sale = optionalSale.unwrap();
+                if (sale.state == "canceled") {
+                    return Promise.reject("La venta especificada ya fue cancelada anteriormente");
+                }
+
+                return Promise.all([sale, ProductController.find(sale.product)]);
+            })
+            .then(([ sale, optionalProduct ]) => {
+                if (optionalProduct.isEmpty()) {
+                    return Promise.reject("El producto especificado ya no existe");
+                }
+                const product = optionalProduct.unwrap();
+                const newStock = product.stock + sale.amountOfProduct;
+
+                return ProductController.connection.doc(product.id)
+                    .update({ stock: newStock })
+            })
+            .then(() => this.connection.doc(id).update({ state }))
+            .then(() => Optional.some("La venta fue cancelada exitosamente"))
+        ;
     }
 }
 
